@@ -1,12 +1,6 @@
-Cloud provider
-
-https://docs.google.com/document/d/17d4qinC_HnIwrK0GHnRlD1FKkTNdN__VO4TH9-EzbIY/edit
-
-https://github.com/kubernetes/kubernetes/issues/57718#issuecomment-354706425
 
 
-
-AWS Prep
+## AWS Setup
 
 - Security Groups (for networking access betwen master/slave)
 - Policy roles (for api access to provision EBS/ELB)
@@ -17,7 +11,7 @@ AWS Prep
 
 
 
-
+## Kubeadm setup
 
 Install kubeadm on all hosts (user-data - will run as root)
 
@@ -65,7 +59,7 @@ kubeadm join --token <token> --discovery-token-ca-cert-hash <ca cert hash>
 
 
 
-
+## kubectl setup
 
 User configuraiton of kubectl
 
@@ -75,3 +69,13 @@ mkdir -p $HOME/.kube
 sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
 sudo chown $(id -u):$(id -g) $HOME/.kube/config
 ~~~
+
+
+
+## Sources
+
+Cloud provider
+
+https://docs.google.com/document/d/17d4qinC_HnIwrK0GHnRlD1FKkTNdN__VO4TH9-EzbIY/edit
+
+https://github.com/kubernetes/kubernetes/issues/57718#issuecomment-354706425
