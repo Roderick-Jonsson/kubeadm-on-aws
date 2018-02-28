@@ -18,7 +18,7 @@ Create a fully repoducable guide outlining the manual steps
 
 **Q:** Why not go directly to a bare metal setup on AWS?
 
-**A:** Kuebadm has already much covered for you regarding the installation process of the components and abstracts this further in an administration friendly way. It strikes a good midle point between comprehensive Kubernetes distributions and the bare metals setup. Nothing is perfect ;) 
+**A:** Kuebadm has already much covered for you regarding the installation process of the components and abstracts this further in an administration friendly way. It strikes a good balance between comprehensive Kubernetes distributions and the bare metals setup. Nothing is perfect ;) 
 
 ## Manual
 
