@@ -1,13 +1,13 @@
 # Kubeadm on AWS
 
-##Vision
+## Vision
 
 Deploy kubeadm on AWS manually
 
-##Mission
+## Mission
 
 Create a manual which outlines the steps
 
-##Contribute
+## Contribute
 
 TODO
