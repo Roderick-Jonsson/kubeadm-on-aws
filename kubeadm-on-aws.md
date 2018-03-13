@@ -1,23 +1,41 @@
-
-
 ## AWS Setup
 
-- Security Groups (for networking access betwen master/slave)
-- Policy roles (for api access to provision EBS/ELB)
+Create a policy role with admin access to all services
 
-**Set a tag on all resources in the form of KubernetesCluster=<cluster name>All instancesOne and only one SG for each instance should be tagged.  This will be modified as necessary to allow ELBs to access the instance**
+Create security group allowing all traffic in subnet
 
-**Set up IAM Roles for nodesFor the master, you want a policy like this (CloudFormation snippet):         Version: '2012-10-17'          Statement:          - Effect: Allow            Action:            - ec2:\*            - elasticloadbalancing:*            - ecr:GetAuthorizationToken            - ecr:BatchCheckLayerAvailability            - ecr:GetDownloadUrlForLayer            - ecr:GetRepositoryPolicy            - ecr:DescribeRepositories            - ecr:ListImages            - ecr:BatchGetImage            - autoscaling:DescribeAutoScalingGroups            - autoscaling:UpdateAutoScalingGroup            Resource: "*"ec2:* may be overkill here but I haven’t done the work to narrow it down.For nodes:       PolicyDocument:          Version: '2012-10-17'          Statement:          - Effect: Allow            Action:            - ec2:Describe*            - ecr:GetAuthorizationToken            - ecr:BatchCheckLayerAvailability            - ecr:GetDownloadUrlForLayer            - ecr:GetRepositoryPolicy            - ecr:DescribeRepositories            - ecr:ListImages            - ecr:BatchGetImage            Resource: "*"Note the * in ec2:Describe***
+Tag all resources `KubernetesCluster=<cluster name>`
 
-
+Create S3 bucket for kubeadm discovery file for the k8s nodes to join master
 
 ## Kubeadm setup
 
-Install kubeadm on all hosts (user-data - will run as root)
+### Master
 
-~~~
+> BUG: CNI not getting setup???
+
+Installing cluster on master (user-data - will run as root)
+
+<!--Summary what does this script do-->
+
+```bash
+#!/bin/bash
+
+# variable values definied by user
+S3BUCKET=5001683761 # S3 Bucket user created to exhcange kubeconfig with nodes and cli users
+CLUSTERDOMAIN=aws.powerodit.ch # Domain to use inside Kubernetes cluster
+
+
+
+# Install AWS CLI
+apt-get update && apt-get install python-pip -y
+pip install awscli
+
+# Install docker as container provider
 apt-get update
 apt-get install -y docker.io
+
+# Add kubernetes repository and install kubelet, kubeadm and kubectl
 apt-get update && apt-get install -y apt-transport-https
 curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
 cat <<EOF >/etc/apt/sources.list.d/kubernetes.list
@@ -25,43 +43,92 @@ deb http://apt.kubernetes.io/ kubernetes-xenial main
 EOF
 apt-get update
 apt-get install -y kubelet kubeadm kubectl
-# Customize kubelet args cluster-domain and cloud-provider
+
+# Configure internal cluster domain via kubelet argument
+sed -i "s#--cluster-domain=cluster\.local#--cluster-domain=$CLUSTERDOMAIN#g" /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
+
+# Add cloud-provider to kubelet arguments
 cat <<EOF >/etc/systemd/system/kubelet.service.d/20-cloud-provider.conf
 [Service]
 Environment="KUBELET_EXTRA_ARGS=--cloud-provider=aws"
-Environment="KUBELET_KUBECONFIG_ARGS=--bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfig=/etc/kubernetes/kubelet.conf"
-Environment="KUBELET_SYSTEM_PODS_ARGS=--pod-manifest-path=/etc/kubernetes/manifests --allow-privileged=true"
-Environment="KUBELET_NETWORK_ARGS=--network-plugin=cni --cni-conf-dir=/etc/cni/net.d --cni-bin-dir=/opt/cni/bin"
-Environment="KUBELET_DNS_ARGS=--cluster-dns=10.96.0.10 --cluster-domain=cluster.local"
-Environment="KUBELET_AUTHZ_ARGS=--authorization-mode=Webhook --client-ca-file=/etc/kubernetes/pki/ca.crt"
-Environment="KUBELET_CADVISOR_ARGS=--cadvisor-port=0"
-Environment="KUBELET_CERTIFICATE_ARGS=--rotate-certificates=true --cert-dir=/var/lib/kubelet/pki"
-ExecStart=/usr/bin/kubelet $KUBELET_KUBECONFIG_ARGS $KUBELET_SYSTEM_PODS_ARGS $KUBELET_NETWORK_ARGS $KUBELET_DNS_ARGS $KUBELET_AUTHZ_ARGS $KUBELET_CADVISOR_ARGS $KUBELET_CERTIFICATE_ARGS $KUBELET_EXTRA_ARGS
 EOF
-~~~
 
-Installing cluster on master (user-data - will run as root)
+# Restart kubelet to load new configuration
+systemctl daemon-reload
+systemctl restart kubelet
 
-~~~
-# install cluster
-kubeadm init --pod-network-cidr=192.168.0.0/16 --service-dns-domain=aws.powerodit.ch
+# install master
+# Add custom internal cluster domain
+kubeadm init --pod-network-cidr=192.168.0.0/16 --service-dns-domain=$CLUSTERDOMAIN
+
+# Workaround: https://github.com/kubernetes/kubernetes/issues/47695
+# Summary: Only during cloud init the hostname is not a FQDN, but it will be afterwards and mismatch as node name, hence disabling NodeRestriction admission plugin
+sed -i 's#NodeRestriction\,##g' /etc/kubernetes/manifests/kube-apiserver.yaml
 
 # Install network overlay
+# We use calico as it supports network policies
 export KUBECONFIG=/etc/kubernetes/admin.conf
 kubectl apply -f https://docs.projectcalico.org/v3.0/getting-started/kubernetes/installation/hosted/kubeadm/1.7/calico.yaml
+
+# Create join command for nodes
+kubeadm token create --description="Infinite ttl token" --ttl=0 --print-join-command > /root/join.cmd
+
+# Upload kubernetes discovery file to s3 bucket for exchange with nodes
+aws s3 cp /root/join.cmd s3://$S3BUCKET
+```
+
+### Nodes (Slave)
+
+> IMPORTANT: Do not progress until your first master has fully setup! It will take with a t2.medium instance about 230 seconds to run everything through
+
+Install kubeadm on all hosts (user-data - will run as root)
+
+<!--Summary what does this script do-->
+
+~~~bash
+#!/bin/bash
+
+# variable values definied by user
+# S3 Bucket user created to exhcange kubeconfig with nodes and cli users
+S3BUCKET=5001683761
+
+
+
+# Install AWS CLI
+apt-get update && apt-get install python-pip -y
+pip install awscli
+
+# Install docker as container provider
+apt-get update
+apt-get install -y docker.io
+
+# Add kubernetes repository and install kubelet, kubeadm and kubectl
+apt-get update && apt-get install -y apt-transport-https
+curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
+cat <<EOF >/etc/apt/sources.list.d/kubernetes.list
+deb http://apt.kubernetes.io/ kubernetes-xenial main
+EOF
+apt-get update
+apt-get install -y kubelet kubeadm kubectl
+
+# Create custom kubelet service arguments
+# cluster-domain="internal dns name of cluster"
+# cloud-provider="aws integration"
+cat <<EOF >/etc/systemd/system/kubelet.service.d/20-cloud-provider.conf
+[Service]
+Environment="KUBELET_EXTRA_ARGS=--cloud-provider=aws"
+EOF
+systemctl daemon-reload
+systemctl restart kubelet
+
+# Join node to master
+aws s3 cp s3://$S3BUCKET/join.cmd /root/join.cmd
+bash join.cmd
 ~~~
 
-Join node
+## Kubectl setup
 
-```
-kubeadm join --token <token> --discovery-token-ca-cert-hash <ca cert hash>
-```
-
-
-
-## kubectl setup
-
-User configuraiton of kubectl
+User configuration of kubectl
 
 ~~~
 # configure kubectl as normal user
@@ -70,8 +137,6 @@ sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
 sudo chown $(id -u):$(id -g) $HOME/.kube/config
 ~~~
 
-
-
 ## Sources
 
 Cloud provider
@@ -79,3 +144,7 @@ Cloud provider
 https://docs.google.com/document/d/17d4qinC_HnIwrK0GHnRlD1FKkTNdN__VO4TH9-EzbIY/edit
 
 https://github.com/kubernetes/kubernetes/issues/57718#issuecomment-354706425
+
+
+
+Zu Risiken und Nebenwirkungen lesen Sie die Software Dokumentation oder fragen Sie Ihren System Administrator oder eröffnen ein Issue ;)
